@@ -1,0 +1,30 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  # Prints traces to the collector's own logs — useful while developing locally
+  # even before you've set up a Honeycomb account.
+  debug:
+    verbosity: detailed
+
+  otlphttp/honeycomb:
+    endpoint: "https://api.honeycomb.io"
+    headers:
+      "x-honeycomb-team": "${env:HONEYCOMB_API_KEY}"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      # Remove the "debug" exporter once Honeycomb is confirmed working, or keep
+      # both — debug is harmless, it just logs everything locally too.
+      exporters: [debug, otlphttp/honeycomb]
