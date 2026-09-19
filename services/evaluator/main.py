@@ -8,7 +8,9 @@ Embeddings for drift detection are generated via Google's hosted text-embedding-
 Grounding/hallucination checks are powered by Moss, an embedded retrieval runtime with
 sub-10ms query latency — no separate vector database or network hop required.
 """
+
 import os
+import time
 from typing import List, Optional
 
 import httpx
@@ -42,19 +44,30 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
 
 
+
 def embed_text(text: str) -> np.ndarray:
     """Get a single embedding vector from Google's hosted embedding API.
     Truncated client-side to 768 dims — Gemini embeddings use Matryoshka
     learning, so the first N values are a valid embedding on their own,
-    which is more reliable than the API's own truncation parameter."""
-    resp = httpx.post(
-        f"{EMBED_URL}?key={GEMINI_API_KEY}",
-        json={"model": "models/gemini-embedding-001", "content": {"parts": [{"text": text}]}},
-        timeout=15.0,
-    )
-    resp.raise_for_status()
-    values = resp.json()["embedding"]["values"]
-    return np.array(values[:768])
+    which is more reliable than the API's own truncation parameter.
+    Retries on transient errors (e.g. 503) since Google's embedding API
+    occasionally returns brief capacity errors under load."""
+    last_error = None
+    for attempt in range(3):
+        try:
+            resp = httpx.post(
+                f"{EMBED_URL}?key={GEMINI_API_KEY}",
+                json={"model": "models/gemini-embedding-001", "content": {"parts": [{"text": text}]}},
+                timeout=15.0,
+            )
+            resp.raise_for_status()
+            values = resp.json()["embedding"]["values"]
+            return np.array(values[:768])
+        except Exception as e:
+            last_error = e
+            if attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+    raise last_error
 
 
 # ---- Moss (grounding / hallucination-check retrieval) ----
