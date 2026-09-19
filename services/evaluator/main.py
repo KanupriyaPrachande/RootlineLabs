@@ -107,12 +107,20 @@ def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
 
 
+cd C:\Users\Kanupriya\Downloads\Rootline\Rootline
+git add .
+git commit -m "Fix: compute_drift was crashing /evaluate on transient embedding errors"
+git push
 def compute_drift(original_task: str, recent_turns: List[str]) -> float:
     """Drift = how far recent turns have moved from the original stated task."""
     if not recent_turns:
         return 0.0
-    task_vec = embed_text(original_task)
-    sims = [cosine_sim(task_vec, embed_text(t)) for t in recent_turns]
+    try:
+        task_vec = embed_text(original_task)
+        sims = [cosine_sim(task_vec, embed_text(t)) for t in recent_turns]
+    except Exception as e:
+        print(f"[compute_drift] embedding failed, defaulting to neutral drift: {e}")
+        return 0.3
     avg_sim = float(np.mean(sims))
     return max(0.0, 1.0 - avg_sim)
 
