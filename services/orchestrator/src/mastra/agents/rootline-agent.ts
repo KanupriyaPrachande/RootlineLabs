@@ -16,6 +16,7 @@ export const rootlineAgent = new Agent({
   // Swap to 'openai/gpt-5.6-sol' if you're on OpenAI instead — just make sure the
   // matching API key is set in .env.
   
-  model: 'groq/llama-3.1-8b-instant',
+
+  model: 'groq/openai/gpt-oss-20b',
   tools: { groundingTool },
 })
