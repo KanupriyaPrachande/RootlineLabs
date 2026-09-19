@@ -106,11 +106,6 @@ class GroundResponse(BaseModel):
 def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
 
-
-cd C:\Users\Kanupriya\Downloads\Rootline\Rootline
-git add .
-git commit -m "Fix: compute_drift was crashing /evaluate on transient embedding errors"
-git push
 def compute_drift(original_task: str, recent_turns: List[str]) -> float:
     """Drift = how far recent turns have moved from the original stated task."""
     if not recent_turns:
