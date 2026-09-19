@@ -1,73 +1,137 @@
 # Rootline
 
-Runtime trust layer for AI agents — Mastra (orchestration) + Qdrant (grounding) +
-Enkrypt-style security + OpenTelemetry (tracing) + Temporal (self-healing feedback).
+**A runtime trust layer for AI agents — watching every turn of every conversation, not just the first prompt.**
 
-## Folder structure
+[![Live Demo](https://img.shields.io/badge/demo-rootline--labs.vercel.app-6aa84f?style=flat-square)](https://rootline-labs.vercel.app/)
+[![Orchestration](https://img.shields.io/badge/orchestration-Mastra-black?style=flat-square)]()
+[![Vector DB](https://img.shields.io/badge/grounding-Qdrant-red?style=flat-square)]()
+[![Tracing](https://img.shields.io/badge/tracing-OpenTelemetry-purple?style=flat-square)]()
+[![Self-Healing](https://img.shields.io/badge/feedback-Temporal-blue?style=flat-square)]()
+
+**[Try it live →](https://rootline-labs.vercel.app/)**
+
+
+<img width="708" height="633" alt="image" src="https://github.com/user-attachments/assets/c783347f-d427-408d-a9a3-2f75ed908956" />
+
+
+---
+
+## What is Rootline?
+
+Most AI safety tooling checks a prompt once, at the door, and then trusts everything that happens after. Rootline doesn't. It sits in the runtime path of every agent turn — security, grounding, and evaluation are continuous, not one-time gates. Ask it something grounded, or something it has no business knowing, and you can watch the pipeline react in real time.
+
+```
+Security → Agent → Ground → Security → Eval
+```
+
+## Why it matters
+
+Agents fail quietly. They drift from their instructions, hallucinate confidently, leak data they shouldn't have touched, or get steered off-course by a cleverly worded turn five messages deep. A single pre-flight prompt check catches none of this. Rootline treats trust as something to be continuously monitored across a conversation's entire lifetime, not verified once and assumed forever after.
+
+## Architecture
+
+```
+Client → Orchestrator (Mastra)
+             │
+             ├── pre-execution check ──────► Security
+             ├── continuous evaluation ────► Evaluator
+             ├── grounding lookup ─────────► Qdrant
+             │
+             ▼
+        LLM Provider
+             │
+             ├── stream moderation ────────► Security
+             ▼
+         Response → Client
+
+Evaluator / Security ── incidents & drift ──► Feedback Worker ──► policy & weight updates ──► Security / Qdrant
+
+All hops are traced ──► OTel Collector ──► any OTLP backend (e.g. Honeycomb)
+```
+
+Every request is orchestrated by Mastra, checked against a security layer before and during execution, grounded against a Qdrant vector store, continuously scored for drift and hallucination by the evaluator, and traced end-to-end via OpenTelemetry. When the evaluator or security service flags an incident, a Temporal-backed feedback worker turns that signal into an update — closing the loop instead of just logging it.
+
+## Tech stack
+
+| Layer | Technology | Role |
+|---|---|---|
+| Orchestration | **Mastra** (TypeScript) | Routes and coordinates every agent turn |
+| Grounding | **Qdrant** | Vector store for retrieval-backed responses |
+| Security | **FastAPI** (Python) | Prompt-injection and PII checks, pre- and mid-execution |
+| Evaluation | **FastAPI** (Python) | Continuous drift and hallucination scoring |
+| Feedback loop | **Temporal** (Python) | Turns incidents into policy and weight updates |
+| Observability | **OpenTelemetry** | Distributed tracing across every hop |
+| Client | **Next.js** | Chat interface |
+
+## Project structure
 
 ```
 Rootline/
-├── docker-compose.yml          # Qdrant + OTel Collector, one command to boot infra
+├── docker-compose.yml          # Qdrant + OTel Collector — one command to boot infra
 ├── .env.example                # copy to .env and fill in keys
 ├── services/
-│   ├── orchestrator/           # Mastra Orchestrator (TypeScript) — the brain
-│   ├── evaluator/               # Moss Evaluator (Python/FastAPI) — drift + hallucination scoring
-│   ├── security/                 # Enkrypt Security (Python/FastAPI) — injection + PII checks
-│   └── feedback/                  # Feedback Loop Worker (Python/Temporal) — self-healing
+│   ├── orchestrator/           # Mastra orchestrator (TypeScript) — the brain
+│   ├── evaluator/               # Drift + hallucination scoring (Python/FastAPI)
+│   ├── security/                 # Injection + PII checks (Python/FastAPI)
+│   └── feedback/                  # Self-healing worker (Python/Temporal)
 ├── infra/
 │   └── otel-collector-config.yaml
 └── apps/
     └── client/                  # Next.js chat UI
 ```
 
-## Build & run order (do this in order, don't skip)
+## Getting started
+
+Run these in order — later steps depend on earlier ones being up.
 
 ```bash
-# 1. copy env template and fill in your API keys
+# 1. Copy the env template and fill in your API keys
 cp .env.example .env
 
-# 2. boot infra (Qdrant + OTel Collector)
+# 2. Boot infra: Qdrant + OTel Collector
 docker compose up -d
 
-# 3. start the evaluator (Python)
+# 3. Start the evaluator (Python) — new terminal
 cd services/evaluator
 pip install -r requirements.txt --break-system-packages
 uvicorn main:app --port 8001 --reload
 
-# 4. start security service (Python) — new terminal
+# 4. Start the security service (Python) — new terminal
 cd services/security
 pip install -r requirements.txt --break-system-packages
 uvicorn main:app --port 8002 --reload
 
-# 5. start the orchestrator (TypeScript/Mastra) — new terminal
+# 5. Start the orchestrator (TypeScript/Mastra) — new terminal
 cd services/orchestrator
 npm install
 npm run dev
 
-# 6. start the feedback worker — new terminal (optional, needs Temporal server running)
+# 6. Start the feedback worker — new terminal (optional; needs a running Temporal server)
 cd services/feedback
 pip install -r requirements.txt --break-system-packages
 python worker.py
 
-# 7. start the client — new terminal
+# 7. Start the client — new terminal
 cd apps/client
 npm install
 npm run dev
 ```
 
-Client runs at `http://localhost:3000`, orchestrator API at `http://localhost:4111`,
-evaluator at `:8001`, security at `:8002`, Qdrant at `:6333`.
+| Service | URL |
+|---|---|
+| Client | `http://localhost:3000` |
+| Orchestrator API | `http://localhost:4111` |
+| Evaluator | `http://localhost:8001` |
+| Security | `http://localhost:8002` |
+| Qdrant | `http://localhost:6333` |
 
-## Data flow (matches the architecture diagram)
+## Roadmap
 
-```
-Client → Orchestrator (Mastra) → [pre-execution check → Security]
-                                → [continuous eval → Evaluator]
-                                → [grounding lookup → Qdrant]
-                                → LLM Provider
-                                → [stream moderation → Security]
-      → Response → Client
+- [ ] Swap/extend the grounding layer for edge-native retrieval to cut round-trip latency
+- [ ] Configurable policy thresholds per deployment
+- [ ] Multi-agent trust propagation (trust scores that travel across agent handoffs)
+- [ ] Dashboard for live incident + drift visualization
 
-Evaluator/Security → incidents/drift → Feedback Worker → policy/weight updates → Security/Qdrant
-All hops → OTel Collector → (Honeycomb, or any OTLP backend)
-```
+---
+
+<p align="center"><sub>Built by <a href="https://github.com/KanupriyaPrachande">Kanupriya Prachande</a></sub></p>
