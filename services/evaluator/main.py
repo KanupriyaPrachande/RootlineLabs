@@ -1,12 +1,12 @@
-"""
+﻿"""
 Moss Evaluator — continuous context evaluation for drift, hallucination risk, and policy.
 
 Called by the Mastra Orchestrator after every agent turn (the "continuous eval" edge
 in the architecture diagram). Returns a trust score the orchestrator can act on.
 
-Embeddings are generated via Google's hosted text-embedding-004 API instead of a
-local PyTorch model — this keeps the service lightweight enough to run on small
-free-tier hosting instances (no multi-hundred-MB model load at startup).
+Embeddings for drift detection are generated via Google's hosted text-embedding-004 API.
+Grounding/hallucination checks are powered by Moss, an embedded retrieval runtime with
+sub-10ms query latency — no separate vector database or network hop required.
 """
 import os
 from typing import List, Optional
@@ -15,7 +15,7 @@ import httpx
 import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
-from qdrant_client import QdrantClient
+from moss import MossClient, QueryOptions
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -36,6 +36,8 @@ app = FastAPI(title="Moss Evaluator")
 FastAPIInstrumentor.instrument_app(app)
 
 # ---- Hosted embeddings (Google text-embedding-004, 768-dim, free tier) ----
+# Used only for drift detection (comparing arbitrary turns to each other).
+# Grounding/hallucination checks use Moss's own built-in embeddings instead.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
 
@@ -55,8 +57,18 @@ def embed_text(text: str) -> np.ndarray:
     return np.array(values[:768])
 
 
-qdrant = QdrantClient(url=os.getenv("QDRANT_URL", "http://localhost:6333"), api_key=os.getenv("QDRANT_API_KEY") or None)
-COLLECTION = os.getenv("QDRANT_COLLECTION", "rootline_grounding")
+# ---- Moss (grounding / hallucination-check retrieval) ----
+moss_client = MossClient(os.getenv("MOSS_PROJECT_ID", ""), os.getenv("MOSS_PROJECT_KEY", ""))
+MOSS_INDEX = "rootline-grounding"
+_moss_index_loaded = False
+
+
+async def ensure_moss_loaded():
+    global _moss_index_loaded
+    if not _moss_index_loaded:
+        await moss_client.load_index(MOSS_INDEX)
+        _moss_index_loaded = True
+
 
 DRIFT_WINDOW = 5  # how many prior turns to compare against for drift detection
 
@@ -105,11 +117,12 @@ def compute_drift(original_task: str, recent_turns: List[str]) -> float:
     return max(0.0, 1.0 - avg_sim)
 
 
-def compute_hallucination_risk(response: str, top_k: int = 3) -> float:
-    """Grounding check: search Qdrant for supporting context; low similarity = high risk."""
+async def compute_hallucination_risk(response: str, top_k: int = 3) -> float:
+    """Grounding check: search Moss for supporting context; low similarity = high risk."""
     try:
-        query_vec = embed_text(response).tolist()
-        hits = qdrant.query_points(collection_name=COLLECTION, query=query_vec, limit=top_k).points
+        await ensure_moss_loaded()
+        results = await moss_client.query(MOSS_INDEX, response, QueryOptions(top_k=top_k))
+        hits = results.docs
     except Exception as e:
         print(f"[compute_hallucination_risk] failed: {e}")
         return 0.5
@@ -121,11 +134,11 @@ def compute_hallucination_risk(response: str, top_k: int = 3) -> float:
 
 
 @app.post("/evaluate", response_model=EvalResponse)
-def evaluate(req: EvalRequest):
+async def evaluate(req: EvalRequest):
     with tracer.start_as_current_span("moss.evaluate"):
         recent = req.conversation_history[-DRIFT_WINDOW:]
         drift = compute_drift(req.original_task, recent)
-        hallucination = compute_hallucination_risk(req.latest_response)
+        hallucination = await compute_hallucination_risk(req.latest_response)
 
         policy_aligned = drift < 0.6 and hallucination < 0.7
 
@@ -154,21 +167,19 @@ def health():
 
 
 @app.post("/ground", response_model=GroundResponse)
-def ground(req: GroundRequest):
+async def ground(req: GroundRequest):
     """
     Text-in, matches-out grounding lookup — used by the Mastra Orchestrator's
     grounding tool.
     """
     with tracer.start_as_current_span("moss.ground"):
         try:
-            query_vec = embed_text(req.query).tolist()
-            hits = qdrant.query_points(
-                collection_name=COLLECTION, query=query_vec, limit=req.top_k
-            ).points
+            await ensure_moss_loaded()
+            results = await moss_client.query(MOSS_INDEX, req.query, QueryOptions(top_k=req.top_k))
         except Exception as e:
             print(f"[ground] failed: {e}")
             return GroundResponse(matches=[])
 
         return GroundResponse(
-            matches=[GroundMatch(text=h.payload.get("text", ""), score=h.score) for h in hits]
+            matches=[GroundMatch(text=d.text, score=d.score) for d in results.docs]
         )
