@@ -3,14 +3,18 @@ Moss Evaluator — continuous context evaluation for drift, hallucination risk, 
 
 Called by the Mastra Orchestrator after every agent turn (the "continuous eval" edge
 in the architecture diagram). Returns a trust score the orchestrator can act on.
+
+Embeddings are generated via Google's hosted text-embedding-004 API instead of a
+local PyTorch model — this keeps the service lightweight enough to run on small
+free-tier hosting instances (no multi-hundred-MB model load at startup).
 """
 import os
 from typing import List, Optional
 
+import httpx
 import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 
 from opentelemetry import trace
@@ -31,9 +35,27 @@ tracer = trace.get_tracer("moss-evaluator")
 app = FastAPI(title="Moss Evaluator")
 FastAPIInstrumentor.instrument_app(app)
 
-# ---- Models ----
-embedder = SentenceTransformer("all-MiniLM-L6-v2")  # lightweight, swap for a bigger model if needed
-qdrant = QdrantClient(url=os.getenv("QDRANT_URL", "http://localhost:6333"))
+# ---- Hosted embeddings (Google text-embedding-004, 768-dim, free tier) ----
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
+
+
+def embed_text(text: str) -> np.ndarray:
+    """Get a single embedding vector from Google's hosted embedding API.
+    Truncated client-side to 768 dims — Gemini embeddings use Matryoshka
+    learning, so the first N values are a valid embedding on their own,
+    which is more reliable than the API's own truncation parameter."""
+    resp = httpx.post(
+        f"{EMBED_URL}?key={GEMINI_API_KEY}",
+        json={"model": "models/gemini-embedding-001", "content": {"parts": [{"text": text}]}},
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    values = resp.json()["embedding"]["values"]
+    return np.array(values[:768])
+
+
+qdrant = QdrantClient(url=os.getenv("QDRANT_URL", "http://localhost:6333"), api_key=os.getenv("QDRANT_API_KEY") or None)
 COLLECTION = os.getenv("QDRANT_COLLECTION", "rootline_grounding")
 
 DRIFT_WINDOW = 5  # how many prior turns to compare against for drift detection
@@ -42,16 +64,16 @@ DRIFT_WINDOW = 5  # how many prior turns to compare against for drift detection
 class EvalRequest(BaseModel):
     session_id: str
     turn_index: int
-    original_task: str            # the user's original stated intent, sent once per session
-    conversation_history: List[str]  # all turns so far, oldest first
-    latest_response: str          # the agent's most recent output to score
+    original_task: str
+    conversation_history: List[str]
+    latest_response: str
 
 
 class EvalResponse(BaseModel):
-    drift_score: float          # 0 = perfectly on-task, 1 = fully drifted
-    hallucination_risk: float   # 0 = fully grounded, 1 = ungrounded / no support found
+    drift_score: float
+    hallucination_risk: float
     policy_aligned: bool
-    action: str                 # "allow" | "flag" | "block"
+    action: str
     reason: Optional[str] = None
 
 
@@ -77,26 +99,26 @@ def compute_drift(original_task: str, recent_turns: List[str]) -> float:
     """Drift = how far recent turns have moved from the original stated task."""
     if not recent_turns:
         return 0.0
-    task_vec = embedder.encode(original_task)
-    turn_vecs = embedder.encode(recent_turns)
-    sims = [cosine_sim(task_vec, v) for v in turn_vecs]
+    task_vec = embed_text(original_task)
+    sims = [cosine_sim(task_vec, embed_text(t)) for t in recent_turns]
     avg_sim = float(np.mean(sims))
-    return max(0.0, 1.0 - avg_sim)  # low similarity -> high drift
+    return max(0.0, 1.0 - avg_sim)
 
 
 def compute_hallucination_risk(response: str, top_k: int = 3) -> float:
     """Grounding check: search Qdrant for supporting context; low similarity = high risk."""
-    query_vec = embedder.encode(response).tolist()
     try:
+        query_vec = embed_text(response).tolist()
         hits = qdrant.query_points(collection_name=COLLECTION, query=query_vec, limit=top_k).points
     except Exception as e:
-        print(f"[compute_hallucination_risk] Qdrant query failed: {e}")
+        print(f"[compute_hallucination_risk] failed: {e}")
         return 0.5
 
     if not hits:
         return 1.0
     best_score = max(h.score for h in hits)
     return max(0.0, 1.0 - best_score)
+
 
 @app.post("/evaluate", response_model=EvalResponse)
 def evaluate(req: EvalRequest):
@@ -131,17 +153,20 @@ def health():
     return {"status": "ok", "service": "moss-evaluator"}
 
 
-
 @app.post("/ground", response_model=GroundResponse)
 def ground(req: GroundRequest):
+    """
+    Text-in, matches-out grounding lookup — used by the Mastra Orchestrator's
+    grounding tool.
+    """
     with tracer.start_as_current_span("moss.ground"):
-        query_vec = embedder.encode(req.query).tolist()
         try:
+            query_vec = embed_text(req.query).tolist()
             hits = qdrant.query_points(
                 collection_name=COLLECTION, query=query_vec, limit=req.top_k
             ).points
         except Exception as e:
-            print(f"[ground] Qdrant query failed: {e}")
+            print(f"[ground] failed: {e}")
             return GroundResponse(matches=[])
 
         return GroundResponse(
