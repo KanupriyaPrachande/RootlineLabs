@@ -5,10 +5,14 @@ import { Room, RoomEvent } from 'livekit-client'
 
 const ORCHESTRATOR_URL = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || 'http://localhost:4111'
 
+
 interface VoiceChatProps {
   sessionId: string
   onTranscript: (text: string) => void
-  onResponse: (text: string, trust?: { drift_score: number; hallucination_risk: number; action: string }) => void
+  onResponse: (
+    text: string,
+    trust?: { drift_score: number; hallucination_risk: number; action: 'allow' | 'flag' | 'block' }
+  ) => void
 }
 
 declare global {
