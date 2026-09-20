@@ -11,8 +11,6 @@
 **[Try it live →](https://rootline-labs.vercel.app/)**
 
 
-<img width="708" height="633" alt="image" src="https://github.com/user-attachments/assets/c783347f-d427-408d-a9a3-2f75ed908956" />
-
 
 ---
 
