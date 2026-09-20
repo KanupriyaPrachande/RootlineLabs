@@ -51,6 +51,9 @@ All hops are traced ──► OTel Collector ──► any OTLP backend (e.g. Ho
 
 Every request is orchestrated by Mastra, checked against a security layer before and during execution, grounded against Moss — our retrieval layer — continuously scored for drift and hallucination by the evaluator, and traced end-to-end via OpenTelemetry. When the evaluator or security service flags an incident, a Temporal-backed feedback worker turns that signal into an update — closing the loop instead of just logging it.
 
+<img width="800" height="600" alt="image" src="https://github.com/user-attachments/assets/48dec5c2-a3dc-4361-b143-a0e094072f41" />
+
+
 ## Tech stack
 
 | Layer | Technology | Role |
