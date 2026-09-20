@@ -4,7 +4,7 @@
 
 [![Live Demo](https://img.shields.io/badge/demo-rootline--labs.vercel.app-6aa84f?style=flat-square)](https://rootline-labs.vercel.app/)
 [![Orchestration](https://img.shields.io/badge/orchestration-Mastra-black?style=flat-square)]()
-[![Vector DB](https://img.shields.io/badge/grounding-Qdrant-red?style=flat-square)]()
+[![Retrieval](https://img.shields.io/badge/retrieval-Moss-red?style=flat-square)]()
 [![Tracing](https://img.shields.io/badge/tracing-OpenTelemetry-purple?style=flat-square)]()
 [![Self-Healing](https://img.shields.io/badge/feedback-Temporal-blue?style=flat-square)]()
 
@@ -35,39 +35,41 @@ Client → Orchestrator (Mastra)
              │
              ├── pre-execution check ──────► Security
              ├── continuous evaluation ────► Evaluator
-             ├── grounding lookup ─────────► Qdrant
+             ├── grounding lookup ─────────► Moss
              │
              ▼
-        LLM Provider
+        LLM Provider (Groq)
              │
              ├── stream moderation ────────► Security
              ▼
          Response → Client
 
-Evaluator / Security ── incidents & drift ──► Feedback Worker ──► policy & weight updates ──► Security / Qdrant
+Evaluator / Security ── incidents & drift ──► Feedback Worker ──► policy & weight updates ──► Security / Moss
 
 All hops are traced ──► OTel Collector ──► any OTLP backend (e.g. Honeycomb)
 ```
 
-Every request is orchestrated by Mastra, checked against a security layer before and during execution, grounded against a Qdrant vector store, continuously scored for drift and hallucination by the evaluator, and traced end-to-end via OpenTelemetry. When the evaluator or security service flags an incident, a Temporal-backed feedback worker turns that signal into an update — closing the loop instead of just logging it.
+Every request is orchestrated by Mastra, checked against a security layer before and during execution, grounded against Moss — our retrieval layer — continuously scored for drift and hallucination by the evaluator, and traced end-to-end via OpenTelemetry. When the evaluator or security service flags an incident, a Temporal-backed feedback worker turns that signal into an update — closing the loop instead of just logging it.
 
 ## Tech stack
 
 | Layer | Technology | Role |
 |---|---|---|
 | Orchestration | **Mastra** (TypeScript) | Routes and coordinates every agent turn |
-| Grounding | **Qdrant** | Vector store for retrieval-backed responses |
+| LLM inference | **Groq** (Llama-based models) | Powers the agent's reasoning and responses |
+| Grounding | **Moss** | Retrieval layer backing every grounded response |
+| Embeddings | **Gemini** (`gemini-embedding-001`) | Hosted embedding generation for grounding and drift scoring — kept lightweight and off-instance rather than loading a local model |
 | Security | **FastAPI** (Python) | Prompt-injection and PII checks, pre- and mid-execution |
 | Evaluation | **FastAPI** (Python) | Continuous drift and hallucination scoring |
 | Feedback loop | **Temporal** (Python) | Turns incidents into policy and weight updates |
 | Observability | **OpenTelemetry** | Distributed tracing across every hop |
-| Client | **Next.js** | Chat interface |
+| Client | **Next.js** | Chat interface, with real-time voice via LiveKit |
 
 ## Project structure
 
 ```
 Rootline/
-├── docker-compose.yml          # Qdrant + OTel Collector — one command to boot infra
+├── docker-compose.yml          # Moss (local) + OTel Collector — one command to boot infra
 ├── .env.example                # copy to .env and fill in keys
 ├── services/
 │   ├── orchestrator/           # Mastra orchestrator (TypeScript) — the brain
@@ -88,7 +90,7 @@ Run these in order — later steps depend on earlier ones being up.
 # 1. Copy the env template and fill in your API keys
 cp .env.example .env
 
-# 2. Boot infra: Qdrant + OTel Collector
+# 2. Boot infra: Moss + OTel Collector
 docker compose up -d
 
 # 3. Start the evaluator (Python) — new terminal
@@ -123,7 +125,7 @@ npm run dev
 | Orchestrator API | `http://localhost:4111` |
 | Evaluator | `http://localhost:8001` |
 | Security | `http://localhost:8002` |
-| Qdrant | `http://localhost:6333` |
+| Moss | `http://localhost:6333` |
 
 ## Roadmap
 
@@ -134,4 +136,4 @@ npm run dev
 
 ---
 
-<p align="center"><sub>Built by <a href="https://github.com/KanupriyaPrachande">Kanupriya Prachande</a></sub></p>
+<p align="center"><sub>Built by <a href="https://github.com/KanupriyaPrachande">Kanupriya Prachande</a></sub></p>nupriya Prachande</a></sub></p>
