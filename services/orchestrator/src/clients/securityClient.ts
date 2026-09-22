@@ -11,20 +11,34 @@ export interface SecurityResult {
   source: 'enkrypt_api' | 'local_fallback'
 }
 
+
 export async function securityCheck(params: {
   sessionId: string
   text: string
   stage: 'pre_execution' | 'stream_moderation'
 }): Promise<SecurityResult> {
-  const res = await fetch(`${SECURITY_URL}/check`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: params.sessionId, text: params.text, stage: params.stage }),
-  })
+  try {
+    const res = await fetch(`${SECURITY_URL}/check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: params.sessionId, text: params.text, stage: params.stage }),
+    })
 
-  if (!res.ok) {
-    // Fail closed on security checks — if the security service is down, block rather
-    // than silently allow unchecked content through.
+    if (!res.ok) {
+      console.error(`[securityCheck] non-OK response: ${res.status} ${res.statusText} from ${SECURITY_URL}`)
+      return {
+        blocked: true,
+        injection_detected: false,
+        pii_detected: false,
+        pii_types: [],
+        reason: 'security_service_unreachable',
+        source: 'local_fallback',
+      }
+    }
+
+    return (await res.json()) as SecurityResult
+  } catch (err) {
+    console.error(`[securityCheck] fetch threw for ${SECURITY_URL}:`, err)
     return {
       blocked: true,
       injection_detected: false,
@@ -34,6 +48,4 @@ export async function securityCheck(params: {
       source: 'local_fallback',
     }
   }
-
-  return (await res.json()) as SecurityResult
 }
